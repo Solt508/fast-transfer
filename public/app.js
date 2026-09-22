@@ -8,14 +8,13 @@ const progressSection = document.getElementById('progress-section');
 const progressBar = document.getElementById('progress-bar');
 const progressLabel = document.getElementById('progress-label');
 
-const CHUNK_SIZE = 64 * 1024; // 64KB لكل جزء لضمان استقرار الاتصال
+const CHUNK_SIZE = 64 * 1024; // 64KB لحماية الذاكرة
 let peerConnection;
 let dataChannel;
 let receivedBuffers = [];
 let receivedSize = 0;
 let fileMeta = null;
 
-// تحديد رقم الغرفة من الرابط أو إنشاء رقم جديد
 let roomId = window.location.hash.substring(1);
 const isInitiator = !roomId;
 
@@ -24,15 +23,23 @@ if (isInitiator) {
     window.location.hash = roomId;
     shareSection.style.display = 'block';
     roomLinkEl.innerText = window.location.href;
-    statusEl.innerText = 'في انتظار فتح صديقك للرابط...';
+    statusEl.innerText = 'في انتظار فتح الطرف الآخر للرابط...';
 } else {
     statusEl.innerText = 'جاري الاتصال بالمرسل...';
 }
 
 socket.emit('join-room', roomId);
 
+// إعدادات WebRTC المحدثة مع خادم TURN و TCP لتخطي جدران الحماية
 const rtcConfig = {
-    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] // سيرفر STUN المجاني من جوجل
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        {
+            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+        }
+    ]
 };
 
 function createPeerConnection() {
@@ -91,7 +98,6 @@ function setupDataChannel() {
     };
 }
 
-// بدء الاتصال عند دخول الطرف الآخر
 socket.on('peer-joined', async () => {
     createPeerConnection();
     const offer = await peerConnection.createOffer();
@@ -99,7 +105,6 @@ socket.on('peer-joined', async () => {
     socket.emit('signal', { room: roomId, signalData: { offer } });
 });
 
-// معالجة إشارات WebRTC
 socket.on('signal', async (data) => {
     if (!peerConnection) createPeerConnection();
 
@@ -115,7 +120,6 @@ socket.on('signal', async (data) => {
     }
 });
 
-// إرسال الملف وتقطيعه
 fileInput.addEventListener('change', () => {
     const file = fileInput.files[0];
     if (!file) return;
@@ -139,7 +143,6 @@ fileInput.addEventListener('change', () => {
         progressLabel.innerText = `جاري الإرسال: ${percent}%`;
 
         if (offset < file.size) {
-            // التحكم بتدفق البيانات لحماية الذاكرة (Backpressure)
             if (dataChannel.bufferedAmount > 8 * 1024 * 1024) {
                 setTimeout(() => readSlice(offset), 50);
             } else {

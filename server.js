@@ -6,25 +6,23 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// سنخبر السيرفر أن يعرض ملفات الواجهة من مجلد اسمه "public" (سننشئه لاحقاً)
+// عرض ملفات الواجهة من مجلد public
 app.use(express.static('public'));
 
-// عندما يتصل أي متصفح بالسيرفر
 io.on('connection', (socket) => {
     console.log('متصفح متصل، المعرف:', socket.id);
 
-    // الانضمام إلى غرفة (الرابط الفريد الذي سترسله لصديقك)
+    // الانضمام إلى غرفة (الرابط الفريد)
     socket.on('join-room', (roomId) => {
         socket.join(roomId);
         console.log(`المتصفح ${socket.id} انضم للرابط/الغرفة: ${roomId}`);
         
-        // إخبار الطرف الآخر أن صديقه قد فتح الرابط وانضم
+        // إخبار الطرف الآخر
         socket.to(roomId).emit('peer-joined', socket.id);
     });
 
-    // تمرير بيانات الاتصال (WebRTC Signals) بين متصفحك ومتصفح صديقك
+    // تمرير بيانات الاتصال
     socket.on('signal', (data) => {
-        // إرسال البيانات للطرف الآخر في نفس الغرفة فقط
         socket.to(data.room).emit('signal', {
             sender: socket.id,
             signalData: data.signalData
@@ -36,8 +34,7 @@ io.on('connection', (socket) => {
     });
 });
 
-// تشغيل السيرفر على المنفذ 3000
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`السيرفر يعمل بنجاح على: http://localhost:${PORT}`);
+    console.log(`السيرفر يعمل بنجاح على المنفذ: ${PORT}`);
 });
