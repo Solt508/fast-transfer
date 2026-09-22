@@ -4,37 +4,22 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+// زدنا مساحة الاستيعاب لضمان عدم انقطاع الفيلم
+const io = new Server(server, { maxHttpBufferSize: 1e8 }); 
 
-// عرض ملفات الواجهة من مجلد public
 app.use(express.static('public'));
 
 io.on('connection', (socket) => {
-    console.log('متصفح متصل، المعرف:', socket.id);
-
-    // الانضمام إلى غرفة (الرابط الفريد)
     socket.on('join-room', (roomId) => {
         socket.join(roomId);
-        console.log(`المتصفح ${socket.id} انضم للرابط/الغرفة: ${roomId}`);
-        
-        // إخبار الطرف الآخر
-        socket.to(roomId).emit('peer-joined', socket.id);
+        socket.to(roomId).emit('peer-joined');
     });
 
-    // تمرير بيانات الاتصال
-    socket.on('signal', (data) => {
-        socket.to(data.room).emit('signal', {
-            sender: socket.id,
-            signalData: data.signalData
-        });
-    });
-
-    socket.on('disconnect', () => {
-        console.log('متصفح قطع الاتصال:', socket.id);
+    // استلام أجزاء الفيلم من المرسل وتمريرها للمستلم فوراً
+    socket.on('file-transfer', (data) => {
+        socket.to(data.room).emit('file-transfer', data);
     });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`السيرفر يعمل بنجاح على المنفذ: ${PORT}`);
-});
+server.listen(PORT, () => console.log(`السيرفر يعمل كوسيط على المنفذ: ${PORT}`));

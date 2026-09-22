@@ -8,9 +8,7 @@ const progressSection = document.getElementById('progress-section');
 const progressBar = document.getElementById('progress-bar');
 const progressLabel = document.getElementById('progress-label');
 
-const CHUNK_SIZE = 64 * 1024; // 64KB لحماية الذاكرة
-let peerConnection;
-let dataChannel;
+const CHUNK_SIZE = 64 * 1024; // تقسيم الفيلم لأجزاء صغيرة
 let receivedBuffers = [];
 let receivedSize = 0;
 let fileMeta = null;
@@ -30,58 +28,31 @@ if (isInitiator) {
 
 socket.emit('join-room', roomId);
 
-// إعدادات WebRTC المحدثة مع خادم TURN و TCP لتخطي جدران الحماية
-const rtcConfig = {
-    iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        {
-            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-        }
-    ]
-};
+// إخبار الطرفين بنجاح الاتصال عبر سيرفرك
+socket.on('peer-joined', () => {
+    statusEl.innerText = 'تم الاتصال بنجاح عبر السيرفر الوسيط!';
+    statusEl.style.color = '#4ade80';
+    transferSection.style.display = 'block';
+    if (!isInitiator) socket.emit('file-transfer', { room: roomId, type: 'ready' });
+});
 
-function createPeerConnection() {
-    peerConnection = new RTCPeerConnection(rtcConfig);
-
-    peerConnection.onicecandidate = (e) => {
-        if (e.candidate) {
-            socket.emit('signal', { room: roomId, signalData: { candidate: e.candidate } });
-        }
-    };
-
-    if (isInitiator) {
-        dataChannel = peerConnection.createDataChannel('fileTransfer');
-        setupDataChannel();
-    } else {
-        peerConnection.ondatachannel = (e) => {
-            dataChannel = e.channel;
-            setupDataChannel();
-        };
-    }
-}
-
-function setupDataChannel() {
-    dataChannel.binaryType = 'arraybuffer';
-    
-    dataChannel.onopen = () => {
-        statusEl.innerText = 'تم الاتصال المباشر بنجاح!';
+// معالجة البيانات القادمة من السيرفر
+socket.on('file-transfer', (data) => {
+    if (data.type === 'ready' && isInitiator) {
+        statusEl.innerText = 'تم الاتصال بنجاح عبر السيرفر الوسيط!';
         statusEl.style.color = '#4ade80';
         transferSection.style.display = 'block';
-    };
-
-    dataChannel.onmessage = (e) => {
-        if (typeof e.data === 'string') {
-            fileMeta = JSON.parse(e.data);
-            receivedBuffers = [];
-            receivedSize = 0;
-            progressSection.style.display = 'block';
-            return;
-        }
-
-        receivedBuffers.push(e.data);
-        receivedSize += e.data.byteLength;
+    } 
+    else if (data.type === 'meta') {
+        fileMeta = data.meta;
+        receivedBuffers = [];
+        receivedSize = 0;
+        progressSection.style.display = 'block';
+    } 
+    else if (data.type === 'chunk') {
+        receivedBuffers.push(data.chunk);
+        receivedSize += data.chunk.byteLength;
+        
         const percent = Math.round((receivedSize / fileMeta.size) * 100);
         progressBar.value = percent;
         progressLabel.innerText = `جاري الاستلام: ${percent}%`;
@@ -93,39 +64,18 @@ function setupDataChannel() {
             a.href = downloadUrl;
             a.download = fileMeta.name;
             a.click();
-            progressLabel.innerText = 'اكتمل الاستلام وتم حفظ الملف!';
+            progressLabel.innerText = 'اكتمل الاستلام وتم حفظ الفيلم!';
         }
-    };
-}
-
-socket.on('peer-joined', async () => {
-    createPeerConnection();
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    socket.emit('signal', { room: roomId, signalData: { offer } });
-});
-
-socket.on('signal', async (data) => {
-    if (!peerConnection) createPeerConnection();
-
-    if (data.signalData.offer) {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.signalData.offer));
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-        socket.emit('signal', { room: roomId, signalData: { answer } });
-    } else if (data.signalData.answer) {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.signalData.answer));
-    } else if (data.signalData.candidate) {
-        await peerConnection.addIceCandidate(new RTCIceCandidate(data.signalData.candidate));
     }
 });
 
+// قراءة الفيلم وإرساله كأجزاء عبر السيرفر
 fileInput.addEventListener('change', () => {
     const file = fileInput.files[0];
     if (!file) return;
 
     progressSection.style.display = 'block';
-    dataChannel.send(JSON.stringify({ name: file.name, size: file.size, type: file.type }));
+    socket.emit('file-transfer', { room: roomId, type: 'meta', meta: { name: file.name, size: file.size, type: file.type } });
 
     let offset = 0;
     const fileReader = new FileReader();
@@ -136,18 +86,15 @@ fileInput.addEventListener('change', () => {
     };
 
     fileReader.onload = (e) => {
-        dataChannel.send(e.target.result);
+        socket.emit('file-transfer', { room: roomId, type: 'chunk', chunk: e.target.result });
         offset += e.target.result.byteLength;
+        
         const percent = Math.round((offset / file.size) * 100);
         progressBar.value = percent;
         progressLabel.innerText = `جاري الإرسال: ${percent}%`;
 
         if (offset < file.size) {
-            if (dataChannel.bufferedAmount > 8 * 1024 * 1024) {
-                setTimeout(() => readSlice(offset), 50);
-            } else {
-                readSlice(offset);
-            }
+            setTimeout(() => readSlice(offset), 10); // تأخير بسيط لحماية السيرفر
         } else {
             progressLabel.innerText = 'اكتمل الإرسال بنجاح!';
         }
